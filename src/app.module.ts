@@ -9,7 +9,9 @@ import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 import { ThrottlerStorageRedisService } from "@nest-lab/throttler-storage-redis";
 import { RedisCacheModule } from "./providers/cache/redis/redis-cache.module";
 import { AuthModule } from "@/src/modules/auth/auth.module";
-import { FabricModule } from "./modules/fabrics/fabric.module";
+import { FabricModule } from "./modules/fabrics-old/fabric.module";
+import { FabricModuleNew } from "./modules/fabric/fabric.module";
+import { CertificatesModule } from "./modules/certificates/certificates.module";
 @Module({
   imports: [
     ThrottlerModule.forRootAsync({
@@ -56,6 +58,8 @@ import { FabricModule } from "./modules/fabrics/fabric.module";
     AuthModule,
     RedisCacheModule,
     FabricModule,
+    FabricModuleNew,
+    CertificatesModule,
   ],
   controllers: [AppController],
   providers: [AppService, ThrottlerGuard],
