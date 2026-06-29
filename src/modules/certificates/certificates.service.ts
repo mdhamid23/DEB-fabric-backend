@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
   Logger,
+  BadRequestException,
 } from "@nestjs/common";
 import * as crypto from "crypto";
 import { FabricGatewayService } from "../fabric/fabric-gateway.service";
@@ -13,6 +14,10 @@ import { Repository } from "typeorm";
 import { QrCodeService } from "./qr-code.service";
 import { CertificateStatus } from "@/src/common/enums/certificate-status.enum";
 import { ManualVerifyCertificateDto } from "./dto/manual-verify-certificate.dto";
+import {
+  BulkCreateResultDto,
+  BulkIssueCertificateDto,
+} from "./dto/bulk-upload.dto";
 
 export type VerificationResult =
   | "AUTHENTIC"
@@ -262,5 +267,132 @@ export class CertificatesService {
 
   private isNotFoundError(err: any): boolean {
     return /does not exist/i.test(err?.message ?? "");
+  }
+
+  // src/modules/certificates/certificates.service.ts (add this method)
+
+  // Add this method to the CertificatesService class
+  // src/modules/certificates/certificates.service.ts
+
+  async bulkIssue(dto: BulkIssueCertificateDto): Promise<BulkCreateResultDto> {
+    // Ensure certificates array exists
+    const certificates = dto.certificates || [];
+
+    if (certificates.length === 0) {
+      throw new BadRequestException(
+        "No certificates provided for bulk creation",
+      );
+    }
+
+    const results: BulkCreateResultDto = {
+      total: certificates.length,
+      created: 0,
+      failed: 0,
+      errors: [],
+      certificates: [],
+    };
+
+    // Process certificates one by one with error handling
+    for (let i = 0; i < certificates.length; i++) {
+      const certDto = certificates[i];
+
+      try {
+        // Check for duplicates in PostgreSQL
+        const existing = await this.certificateRepository.findOne({
+          where: {
+            rollNumber: certDto.rollNumber,
+            registrationNumber: certDto.registrationNumber,
+          },
+        });
+
+        if (existing) {
+          results.failed++;
+          results.errors.push({
+            index: i,
+            rollNumber: certDto.rollNumber,
+            registrationNumber: certDto.registrationNumber,
+            error:
+              "Certificate already exists with given roll and registration number",
+          });
+          continue;
+        }
+
+        const certificateHash = this.computeCertificateHash(certDto);
+
+        // Create record in DRAFT status
+        const record = this.certificateRepository.create({
+          ...certDto,
+          status: CertificateStatus.DRAFT,
+        });
+        await this.certificateRepository.save(record);
+
+        const qrToken = this.qrCodeService.generateQrToken({
+          certificateId: record.id,
+        });
+        record.qrCodeToken = qrToken;
+
+        const contract = this.fabric.getContract();
+
+        try {
+          // Submit to blockchain
+          const resultBytes = await contract.submitTransaction(
+            "IssueCertificate",
+            record.id,
+            certificateHash,
+          );
+
+          const fabricRecord = JSON.parse(
+            Buffer.from(resultBytes).toString("utf8"),
+          );
+
+          // Update status to ISSUED
+          record.status = CertificateStatus.ISSUED;
+          record.blockchainTxId = fabricRecord.txId ?? null;
+          await this.certificateRepository.save(record);
+
+          results.created++;
+          results.certificates.push({
+            certificateId: record.id,
+            studentName: record.studentName,
+            examName: record.examName,
+            result: record.result,
+            board: record.board,
+            passingYear: record.passingYear,
+            status: "ISSUED",
+            qrToken,
+            issuedAt: record.createdAt,
+          });
+        } catch (err: any) {
+          // Rollback: mark as FAILED
+          record.status = CertificateStatus.FAILED;
+          await this.certificateRepository.save(record);
+
+          results.failed++;
+          let errorMessage = err.message || "Blockchain submission failed";
+
+          if (this.isAlreadyExistsError(err)) {
+            errorMessage = "Certificate already exists on the blockchain";
+          }
+
+          results.errors.push({
+            index: i,
+            rollNumber: certDto.rollNumber,
+            registrationNumber: certDto.registrationNumber,
+            error: errorMessage,
+          });
+        }
+      } catch (err: any) {
+        // Catch any other errors
+        results.failed++;
+        results.errors.push({
+          index: i,
+          rollNumber: certDto.rollNumber,
+          registrationNumber: certDto.registrationNumber,
+          error: err.message || "Failed to process certificate",
+        });
+      }
+    }
+
+    return results;
   }
 }

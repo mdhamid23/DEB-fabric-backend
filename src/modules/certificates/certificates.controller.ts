@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -15,6 +16,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { UserRole } from "../users/entities/user.entity";
+import { BulkIssueCertificateDto } from "./dto/bulk-upload.dto";
 
 @Controller("certificates")
 export class CertificatesController {
@@ -25,6 +27,33 @@ export class CertificatesController {
   @Post()
   async issue(@Body(new ValidationPipe()) dto: IssueCertificateDto) {
     return await this.certificatesService.issue(dto);
+  }
+
+  // @UseGuards(JwtAuthGuard, RolesGuard)
+  // @Roles(UserRole.SUPERADMIN)
+  @Post("bulk")
+  async bulkIssue(@Body() body: any) {
+    console.log("Bulk issue request received:", body);
+
+    // Handle both formats: direct array or object with certificates property
+    let certificates: IssueCertificateDto[];
+
+    if (Array.isArray(body)) {
+      // If the body is directly an array
+      certificates = body;
+    } else if (body.certificates && Array.isArray(body.certificates)) {
+      // If the body has a certificates property
+      certificates = body.certificates;
+    } else {
+      throw new BadRequestException(
+        "Invalid request format. Expected an array of certificates or an object with a certificates property.",
+      );
+    }
+
+    const dto = new BulkIssueCertificateDto();
+    dto.certificates = certificates;
+
+    return await this.certificatesService.bulkIssue(dto);
   }
 
   @Get()
